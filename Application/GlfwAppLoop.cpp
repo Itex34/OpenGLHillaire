@@ -62,6 +62,9 @@ namespace
 		state.uiAutoExposure = gameGl.getAutoExposureEnabled();
 		state.uiManualExposure = gameGl.getManualExposure();
 		state.uiExposureBiasEv = gameGl.getExposureBiasEv();
+		state.uiUseHistogramAutoExposure = gameGl.getUseHistogramAutoExposure();
+		state.uiAutoExposureHistogramLowPercent = gameGl.getAutoExposureHistogramLowPercent();
+		state.uiAutoExposureHistogramHighPercent = gameGl.getAutoExposureHistogramHighPercent();
 		state.uiSunAngleExposureBias = gameGl.getSunAngleExposureBiasEnabled();
 		state.uiSunAngleExposureBiasAtHorizonEv = gameGl.getSunAngleExposureBiasAtHorizonEv();
 		state.uiSunAngleExposureBiasAtNoonEv = gameGl.getSunAngleExposureBiasAtNoonEv();
@@ -221,6 +224,9 @@ namespace
 		gameGl.setAutoExposureEnabled(state.uiAutoExposure);
 		gameGl.setManualExposure(state.uiManualExposure);
 		gameGl.setExposureBiasEv(state.uiExposureBiasEv);
+		gameGl.setUseHistogramAutoExposure(state.uiUseHistogramAutoExposure);
+		gameGl.setAutoExposureHistogramLowPercent(state.uiAutoExposureHistogramLowPercent);
+		gameGl.setAutoExposureHistogramHighPercent(state.uiAutoExposureHistogramHighPercent);
 		gameGl.setSunAngleExposureBiasEnabled(state.uiSunAngleExposureBias);
 		gameGl.setSunAngleExposureBiasAtHorizonEv(state.uiSunAngleExposureBiasAtHorizonEv);
 		gameGl.setSunAngleExposureBiasAtNoonEv(state.uiSunAngleExposureBiasAtNoonEv);
@@ -259,6 +265,9 @@ namespace
 		state.uiMaxSpp = gameGl.getRayMarchMaxSpp();
 		state.uiManualExposure = gameGl.getManualExposure();
 		state.uiExposureBiasEv = gameGl.getExposureBiasEv();
+		state.uiUseHistogramAutoExposure = gameGl.getUseHistogramAutoExposure();
+		state.uiAutoExposureHistogramLowPercent = gameGl.getAutoExposureHistogramLowPercent();
+		state.uiAutoExposureHistogramHighPercent = gameGl.getAutoExposureHistogramHighPercent();
 		state.uiSunAngleExposureBias = gameGl.getSunAngleExposureBiasEnabled();
 		state.uiSunAngleExposureBiasAtHorizonEv = gameGl.getSunAngleExposureBiasAtHorizonEv();
 		state.uiSunAngleExposureBiasAtNoonEv = gameGl.getSunAngleExposureBiasAtNoonEv();

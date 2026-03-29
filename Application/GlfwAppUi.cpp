@@ -86,6 +86,9 @@ void drawGlfwUi(GameGl& gameGl, GlfwUiState& state)
 		float disabledExposure = state.uiManualExposure;
 		float disabledAutoKey = state.uiAutoExposureKey;
 		float disabledBias = state.uiExposureBiasEv;
+		bool disabledHistogramAutoExposure = state.uiUseHistogramAutoExposure;
+		float disabledHistogramLowPercent = state.uiAutoExposureHistogramLowPercent;
+		float disabledHistogramHighPercent = state.uiAutoExposureHistogramHighPercent;
 		bool disabledSunAngleBias = state.uiSunAngleExposureBias;
 		float disabledSunAngleHorizonBias = state.uiSunAngleExposureBiasAtHorizonEv;
 		float disabledSunAngleNoonBias = state.uiSunAngleExposureBiasAtNoonEv;
@@ -99,6 +102,9 @@ void drawGlfwUi(GameGl& gameGl, GlfwUiState& state)
 		ImGui::SliderFloat("Manual Exposure", &disabledExposure, 0.01f, 64.0f, "%.3f");
 		ImGui::SliderFloat("Auto Exposure Key", &disabledAutoKey, 0.01f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Exposure Bias (EV)", &disabledBias, -8.0f, 8.0f, "%.2f");
+		ImGui::Checkbox("Histogram Metering", &disabledHistogramAutoExposure);
+		ImGui::SliderFloat("Meter Low (%)", &disabledHistogramLowPercent, 0.0f, 95.0f, "%.1f");
+		ImGui::SliderFloat("Meter High (%)", &disabledHistogramHighPercent, 5.0f, 100.0f, "%.1f");
 		ImGui::Checkbox("Bias from Sun Angle", &disabledSunAngleBias);
 		ImGui::SliderFloat("Bias @ Sun 0 deg (EV)", &disabledSunAngleHorizonBias, -8.0f, 8.0f, "%.2f");
 		ImGui::SliderFloat("Bias @ Noon 90 deg (EV)", &disabledSunAngleNoonBias, -8.0f, 8.0f, "%.2f");
@@ -126,6 +132,9 @@ void drawGlfwUi(GameGl& gameGl, GlfwUiState& state)
 		}
 		ImGui::SliderFloat("Auto Exposure Key", &state.uiAutoExposureKey, 0.01f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Exposure Bias (EV)", &state.uiExposureBiasEv, -8.0f, 8.0f, "%.2f");
+		ImGui::Checkbox("Histogram Metering", &state.uiUseHistogramAutoExposure);
+		ImGui::SliderFloat("Meter Low (%)", &state.uiAutoExposureHistogramLowPercent, 0.0f, 95.0f, "%.1f");
+		ImGui::SliderFloat("Meter High (%)", &state.uiAutoExposureHistogramHighPercent, 5.0f, 100.0f, "%.1f");
 		ImGui::Checkbox("Bias from Sun Angle", &state.uiSunAngleExposureBias);
 		ImGui::SliderFloat("Bias @ Sun 0 deg (EV)", &state.uiSunAngleExposureBiasAtHorizonEv, -8.0f, 8.0f, "%.2f");
 		ImGui::SliderFloat("Bias @ Noon 90 deg (EV)", &state.uiSunAngleExposureBiasAtNoonEv, -8.0f, 8.0f, "%.2f");

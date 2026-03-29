@@ -41,7 +41,10 @@ namespace
 	const char* kTerrainShadowFragmentShaderPath = "Resources/glsl/terrain_shadow.frag";
 	const char* kRaymarchFragmentShaderPath = "Resources/glsl/render_raymarching_hillaire.frag";
 	const char* kPostProcessFragmentShaderPath = "Resources/glsl/postprocess.frag";
+	const char* kAutoExposureHistogramComputeShaderPath = "Resources/glsl/auto_exposure_histogram.comp";
+	const char* kAutoExposureReduceComputeShaderPath = "Resources/glsl/auto_exposure_reduce.comp";
 	const float kMainCameraFovYDegrees = 66.6f;
+	const int kAutoExposureHistogramBinCount = 128;
 
 	float toneMapPreviewValue(float value, float exposure)
 	{
@@ -338,6 +341,26 @@ void GameGl::setExposureBiasEv(float value)
 {
 	const float clamped = value < -16.0f ? -16.0f : (value > 16.0f ? 16.0f : value);
 	mExposureBiasEv = clamped;
+}
+
+void GameGl::setAutoExposureHistogramLowPercent(float value)
+{
+	float clamped = value < 0.0f ? 0.0f : (value > 95.0f ? 95.0f : value);
+	if (clamped >= mAutoExposureHistogramHighPercent)
+	{
+		clamped = mAutoExposureHistogramHighPercent - 1.0f;
+	}
+	mAutoExposureHistogramLowPercent = clamped < 0.0f ? 0.0f : clamped;
+}
+
+void GameGl::setAutoExposureHistogramHighPercent(float value)
+{
+	float clamped = value < 5.0f ? 5.0f : (value > 100.0f ? 100.0f : value);
+	if (clamped <= mAutoExposureHistogramLowPercent)
+	{
+		clamped = mAutoExposureHistogramLowPercent + 1.0f;
+	}
+	mAutoExposureHistogramHighPercent = clamped > 100.0f ? 100.0f : clamped;
 }
 
 void GameGl::setSunAngleExposureBiasAtHorizonEv(float value)
@@ -648,8 +671,10 @@ bool GameGl::createPrograms()
 	const unsigned int terrainShadowFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kTerrainShadowFragmentShaderPath);
 	const unsigned int raymarchFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kRaymarchFragmentShaderPath);
 	const unsigned int postProcessFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kPostProcessFragmentShaderPath);
+	const unsigned int autoExposureHistogramCs = loadAndCompileShader(GL_COMPUTE_SHADER, kAutoExposureHistogramComputeShaderPath);
+	const unsigned int autoExposureReduceCs = loadAndCompileShader(GL_COMPUTE_SHADER, kAutoExposureReduceComputeShaderPath);
 
-	if (fullscreenVs == 0 || transmittanceFs == 0 || multiScatteringCs == 0 || skyViewFs == 0 || aerialPerspectiveCs == 0 || terrainVs == 0 || terrainFs == 0 || terrainShadowFs == 0 || raymarchFs == 0 || postProcessFs == 0)
+	if (fullscreenVs == 0 || transmittanceFs == 0 || multiScatteringCs == 0 || skyViewFs == 0 || aerialPerspectiveCs == 0 || terrainVs == 0 || terrainFs == 0 || terrainShadowFs == 0 || raymarchFs == 0 || postProcessFs == 0 || autoExposureHistogramCs == 0 || autoExposureReduceCs == 0)
 	{
 		if (fullscreenVs != 0) glDeleteShader(fullscreenVs);
 		if (transmittanceFs != 0) glDeleteShader(transmittanceFs);
@@ -661,6 +686,8 @@ bool GameGl::createPrograms()
 		if (terrainShadowFs != 0) glDeleteShader(terrainShadowFs);
 		if (raymarchFs != 0) glDeleteShader(raymarchFs);
 		if (postProcessFs != 0) glDeleteShader(postProcessFs);
+		if (autoExposureHistogramCs != 0) glDeleteShader(autoExposureHistogramCs);
+		if (autoExposureReduceCs != 0) glDeleteShader(autoExposureReduceCs);
 		return false;
 	}
 
@@ -672,6 +699,8 @@ bool GameGl::createPrograms()
 	mTerrainShadowProgram = linkProgram(terrainVs, terrainShadowFs, "TerrainShadow");
 	mRaymarchProgram = linkProgram(fullscreenVs, raymarchFs, "RenderRaymarchingHillaire");
 	mPostProcessProgram = linkProgram(fullscreenVs, postProcessFs, "PostProcess");
+	mAutoExposureHistogramProgram = linkComputeProgram(autoExposureHistogramCs, "AutoExposureHistogram");
+	mAutoExposureReduceProgram = linkComputeProgram(autoExposureReduceCs, "AutoExposureReduce");
 
 	glDeleteShader(fullscreenVs);
 	glDeleteShader(transmittanceFs);
@@ -683,13 +712,44 @@ bool GameGl::createPrograms()
 	glDeleteShader(terrainShadowFs);
 	glDeleteShader(raymarchFs);
 	glDeleteShader(postProcessFs);
+	glDeleteShader(autoExposureHistogramCs);
+	glDeleteShader(autoExposureReduceCs);
 
-	if (mTransmittanceProgram == 0 || mMultiScatteringProgram == 0 || mSkyViewProgram == 0 || mAerialPerspectiveProgram == 0 || mTerrainProgram == 0 || mTerrainShadowProgram == 0 || mRaymarchProgram == 0 || mPostProcessProgram == 0)
+	if (mTransmittanceProgram == 0 || mMultiScatteringProgram == 0 || mSkyViewProgram == 0 || mAerialPerspectiveProgram == 0 || mTerrainProgram == 0 || mTerrainShadowProgram == 0 || mRaymarchProgram == 0 || mPostProcessProgram == 0 || mAutoExposureHistogramProgram == 0 || mAutoExposureReduceProgram == 0)
 	{
 		destroyPrograms();
 		return false;
 	}
 
+	return true;
+}
+
+bool GameGl::createAutoExposureResources()
+{
+	glGenBuffers(1, &mAutoExposureHistogramSsbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, mAutoExposureHistogramSsbo);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned int) * static_cast<size_t>(kAutoExposureHistogramBinCount), nullptr, GL_DYNAMIC_DRAW);
+	unsigned int clearValue = 0u;
+	glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &clearValue);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	glGenTextures(1, &mAutoExposureMeterTex);
+	glBindTexture(GL_TEXTURE_2D, mAutoExposureMeterTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	const float initialMeterLuminance = 0.18f;
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 1, 1, 0, GL_RED, GL_FLOAT, &initialMeterLuminance);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	const unsigned int err = glGetError();
+	if (err != GL_NO_ERROR)
+	{
+		showMessageBox("OpenGL resource error", "Failed to create auto-exposure histogram resources.");
+		destroyAutoExposureResources();
+		return false;
+	}
 	return true;
 }
 
@@ -990,6 +1050,16 @@ bool GameGl::createSceneResources()
 
 void GameGl::destroyPrograms()
 {
+	if (mAutoExposureReduceProgram != 0)
+	{
+		glDeleteProgram(mAutoExposureReduceProgram);
+		mAutoExposureReduceProgram = 0;
+	}
+	if (mAutoExposureHistogramProgram != 0)
+	{
+		glDeleteProgram(mAutoExposureHistogramProgram);
+		mAutoExposureHistogramProgram = 0;
+	}
 	if (mPostProcessProgram != 0)
 	{
 		glDeleteProgram(mPostProcessProgram);
@@ -1029,6 +1099,20 @@ void GameGl::destroyPrograms()
 	{
 		glDeleteProgram(mTransmittanceProgram);
 		mTransmittanceProgram = 0;
+	}
+}
+
+void GameGl::destroyAutoExposureResources()
+{
+	if (mAutoExposureMeterTex != 0)
+	{
+		glDeleteTextures(1, &mAutoExposureMeterTex);
+		mAutoExposureMeterTex = 0;
+	}
+	if (mAutoExposureHistogramSsbo != 0)
+	{
+		glDeleteBuffers(1, &mAutoExposureHistogramSsbo);
+		mAutoExposureHistogramSsbo = 0;
 	}
 }
 
@@ -1163,7 +1247,7 @@ bool GameGl::initialise()
 		shutdown();
 		return false;
 	}
-	if (!createTransmittanceResources() || !createMultipleScatteringResources() || !createSkyViewResources() || !createAerialPerspectiveResources() || !createTerrainResources() || !createShadowResources() || !createSceneResources())
+	if (!createAutoExposureResources() || !createTransmittanceResources() || !createMultipleScatteringResources() || !createSkyViewResources() || !createAerialPerspectiveResources() || !createTerrainResources() || !createShadowResources() || !createSceneResources())
 	{
 		shutdown();
 		return false;
@@ -1180,6 +1264,7 @@ void GameGl::shutdown()
 {
 	destroyGpuPassTimers();
 	destroySceneResources();
+	destroyAutoExposureResources();
 	destroyShadowResources();
 	destroyTerrainResources();
 	destroyAerialPerspectiveResources();
@@ -1718,6 +1803,76 @@ void GameGl::renderTerrainScene()
 	endGpuPassTimer(mTerrainPassTimer);
 }
 
+void GameGl::runAutoExposureHistogram()
+{
+	if (mAutoExposureHistogramProgram == 0 || mAutoExposureReduceProgram == 0 || mAutoExposureHistogramSsbo == 0 || mAutoExposureMeterTex == 0 || mFinalHdrTex == 0)
+	{
+		return;
+	}
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, mAutoExposureHistogramSsbo);
+	unsigned int clearValue = 0u;
+	glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &clearValue);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	glUseProgram(mAutoExposureHistogramProgram);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, mFinalHdrTex);
+	const int hdrLoc = glGetUniformLocation(mAutoExposureHistogramProgram, "u_hdr_tex");
+	if (hdrLoc >= 0) glUniform1i(hdrLoc, 0);
+	const int widthLoc = glGetUniformLocation(mAutoExposureHistogramProgram, "u_width");
+	if (widthLoc >= 0) glUniform1i(widthLoc, mBackbufferWidth);
+	const int heightLoc = glGetUniformLocation(mAutoExposureHistogramProgram, "u_height");
+	if (heightLoc >= 0) glUniform1i(heightLoc, mBackbufferHeight);
+	const int binCountLoc = glGetUniformLocation(mAutoExposureHistogramProgram, "u_bin_count");
+	if (binCountLoc >= 0) glUniform1i(binCountLoc, kAutoExposureHistogramBinCount);
+	const int logMinLoc = glGetUniformLocation(mAutoExposureHistogramProgram, "u_log_luminance_min");
+	if (logMinLoc >= 0) glUniform1f(logMinLoc, -12.0f);
+	const int logMaxLoc = glGetUniformLocation(mAutoExposureHistogramProgram, "u_log_luminance_max");
+	if (logMaxLoc >= 0) glUniform1f(logMaxLoc, 20.0f);
+	const int maxLumLoc = glGetUniformLocation(mAutoExposureHistogramProgram, "u_max_sample_luminance");
+	if (maxLumLoc >= 0) glUniform1f(maxLumLoc, 20000.0f);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, mAutoExposureHistogramSsbo);
+	const GLuint groupX = static_cast<GLuint>((mBackbufferWidth + 15) / 16);
+	const GLuint groupY = static_cast<GLuint>((mBackbufferHeight + 15) / 16);
+	glDispatchCompute(groupX > 0 ? groupX : 1, groupY > 0 ? groupY : 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+	glUseProgram(mAutoExposureReduceProgram);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, mAutoExposureHistogramSsbo);
+	glBindImageTexture(0, mAutoExposureMeterTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+	const int reduceBinCountLoc = glGetUniformLocation(mAutoExposureReduceProgram, "u_bin_count");
+	if (reduceBinCountLoc >= 0) glUniform1i(reduceBinCountLoc, kAutoExposureHistogramBinCount);
+	const int reduceLogMinLoc = glGetUniformLocation(mAutoExposureReduceProgram, "u_log_luminance_min");
+	if (reduceLogMinLoc >= 0) glUniform1f(reduceLogMinLoc, -12.0f);
+	const int reduceLogMaxLoc = glGetUniformLocation(mAutoExposureReduceProgram, "u_log_luminance_max");
+	if (reduceLogMaxLoc >= 0) glUniform1f(reduceLogMaxLoc, 20.0f);
+	const float lowPercent = mAutoExposureHistogramLowPercent < 0.0f ? 0.0f : (mAutoExposureHistogramLowPercent > 100.0f ? 1.0f : (mAutoExposureHistogramLowPercent * 0.01f));
+	float highPercent = mAutoExposureHistogramHighPercent < 0.0f ? 0.0f : (mAutoExposureHistogramHighPercent > 100.0f ? 1.0f : (mAutoExposureHistogramHighPercent * 0.01f));
+	if (highPercent <= lowPercent)
+	{
+		highPercent = lowPercent + 0.01f;
+	}
+	if (highPercent > 1.0f)
+	{
+		highPercent = 1.0f;
+	}
+	const int lowPercentLoc = glGetUniformLocation(mAutoExposureReduceProgram, "u_low_percent");
+	if (lowPercentLoc >= 0) glUniform1f(lowPercentLoc, lowPercent);
+	const int highPercentLoc = glGetUniformLocation(mAutoExposureReduceProgram, "u_high_percent");
+	if (highPercentLoc >= 0) glUniform1f(highPercentLoc, highPercent);
+	const int fallbackLumLoc = glGetUniformLocation(mAutoExposureReduceProgram, "u_fallback_luminance");
+	if (fallbackLumLoc >= 0) glUniform1f(fallbackLumLoc, 0.18f);
+	glDispatchCompute(1, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+
+	glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glUseProgram(0);
+}
+
 void GameGl::renderPresent()
 {
 	beginGpuPassTimer(mPresentPassTimer);
@@ -1801,11 +1956,30 @@ void GameGl::renderPresent()
 	glGenerateMipmap(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
 
+	const bool useHistogramMetering =
+		mAutoExposureEnabled &&
+		mUseHistogramAutoExposure &&
+		!mPhysicalModeEnabled &&
+		mAutoExposureHistogramProgram != 0 &&
+		mAutoExposureReduceProgram != 0 &&
+		mAutoExposureHistogramSsbo != 0 &&
+		mAutoExposureMeterTex != 0;
+	if (useHistogramMetering)
+	{
+		runAutoExposureHistogram();
+	}
+
 	glUseProgram(mPostProcessProgram);
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, mFinalHdrTex);
 	const int hdrLoc = glGetUniformLocation(mPostProcessProgram, "u_hdr_tex");
 	if (hdrLoc >= 0) glUniform1i(hdrLoc, 0);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, mAutoExposureMeterTex);
+	const int histogramMeterLoc = glGetUniformLocation(mPostProcessProgram, "u_auto_exposure_meter_tex");
+	if (histogramMeterLoc >= 0) glUniform1i(histogramMeterLoc, 1);
+	const int useHistogramLoc = glGetUniformLocation(mPostProcessProgram, "u_use_histogram_auto_exposure");
+	if (useHistogramLoc >= 0) glUniform1i(useHistogramLoc, useHistogramMetering ? 1 : 0);
 	const int agxLoc = glGetUniformLocation(mPostProcessProgram, "u_use_agx");
 	if (agxLoc >= 0) glUniform1i(agxLoc, mUseAgxTonemap ? 1 : 0);
 	const int autoExposureLoc = glGetUniformLocation(mPostProcessProgram, "u_auto_exposure");
@@ -1842,6 +2016,8 @@ void GameGl::renderPresent()
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 
 	glBindVertexArray(0);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, 0);
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, 0);
 	glUseProgram(0);

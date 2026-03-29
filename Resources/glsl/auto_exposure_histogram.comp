@@ -1,0 +1,45 @@
+#version 430 core
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D u_hdr_tex;
+
+layout(std430, binding = 0) buffer HistogramBuffer
+{
+	uint bins[];
+};
+
+uniform int u_width;
+uniform int u_height;
+uniform int u_bin_count;
+uniform float u_log_luminance_min;
+uniform float u_log_luminance_max;
+uniform float u_max_sample_luminance;
+
+void main()
+{
+	if (u_bin_count <= 0)
+	{
+		return;
+	}
+
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (pixel.x >= u_width || pixel.y >= u_height)
+	{
+		return;
+	}
+
+	vec3 hdr = texelFetch(u_hdr_tex, pixel, 0).rgb;
+	hdr = max(hdr, vec3(0.0));
+
+	const vec3 lumaWeights = vec3(0.2126, 0.7152, 0.0722);
+	float luminance = dot(hdr, lumaWeights);
+	luminance = min(luminance, max(u_max_sample_luminance, 1e-4));
+	luminance = max(luminance, 1e-6);
+
+	float logLum = log2(luminance);
+	float range = max(u_log_luminance_max - u_log_luminance_min, 1e-4);
+	float t = clamp((logLum - u_log_luminance_min) / range, 0.0, 0.99999994);
+	uint bin = uint(floor(t * float(u_bin_count)));
+	atomicAdd(bins[bin], 1u);
+}

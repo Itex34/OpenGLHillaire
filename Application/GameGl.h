@@ -78,6 +78,9 @@ public:
 	void setAutoExposureEnabled(bool enabled) { mAutoExposureEnabled = enabled; }
 	void setManualExposure(float value);
 	void setExposureBiasEv(float value);
+	void setUseHistogramAutoExposure(bool enabled) { mUseHistogramAutoExposure = enabled; }
+	void setAutoExposureHistogramLowPercent(float value);
+	void setAutoExposureHistogramHighPercent(float value);
 	void setSunAngleExposureBiasEnabled(bool enabled) { mSunAngleExposureBiasEnabled = enabled; }
 	void setSunAngleExposureBiasAtHorizonEv(float value);
 	void setSunAngleExposureBiasAtNoonEv(float value);
@@ -121,6 +124,9 @@ public:
 	bool getAutoExposureEnabled() const { return mAutoExposureEnabled; }
 	float getManualExposure() const { return mManualExposure; }
 	float getExposureBiasEv() const { return mExposureBiasEv; }
+	bool getUseHistogramAutoExposure() const { return mUseHistogramAutoExposure; }
+	float getAutoExposureHistogramLowPercent() const { return mAutoExposureHistogramLowPercent; }
+	float getAutoExposureHistogramHighPercent() const { return mAutoExposureHistogramHighPercent; }
 	bool getSunAngleExposureBiasEnabled() const { return mSunAngleExposureBiasEnabled; }
 	float getSunAngleExposureBiasAtHorizonEv() const { return mSunAngleExposureBiasAtHorizonEv; }
 	float getSunAngleExposureBiasAtNoonEv() const { return mSunAngleExposureBiasAtNoonEv; }
@@ -165,6 +171,7 @@ private:
 
 	bool createPrograms();
 	void createGpuPassTimers();
+	bool createAutoExposureResources();
 	bool createTransmittanceResources();
 	bool createMultipleScatteringResources();
 	bool createSkyViewResources();
@@ -174,6 +181,7 @@ private:
 	bool createSceneResources();
 	void destroyPrograms();
 	void destroyGpuPassTimers();
+	void destroyAutoExposureResources();
 	void destroyTransmittanceResources();
 	void destroyMultipleScatteringResources();
 	void destroySkyViewResources();
@@ -188,6 +196,7 @@ private:
 	void renderShadowMap();
 	void renderTerrainScene();
 	void renderPresent();
+	void runAutoExposureHistogram();
 	void copyAerialPerspectivePreviewSlice();
 	void updateLutPreviewTextures();
 	void uploadAtmosphereUniforms(unsigned int program);
@@ -245,6 +254,8 @@ private:
 	unsigned int mTerrainProgram = 0;
 	unsigned int mRaymarchProgram = 0;
 	unsigned int mPostProcessProgram = 0;
+	unsigned int mAutoExposureHistogramProgram = 0;
+	unsigned int mAutoExposureReduceProgram = 0;
 	unsigned int mTerrainShadowProgram = 0;
 
 	unsigned int mTransmittanceTex = 0;
@@ -265,6 +276,8 @@ private:
 	unsigned int mSceneDepthTex = 0;
 	unsigned int mFinalHdrFbo = 0;
 	unsigned int mFinalHdrTex = 0;
+	unsigned int mAutoExposureHistogramSsbo = 0;
+	unsigned int mAutoExposureMeterTex = 0;
 	float mMultiScatteringDebugMin = 0.0f;
 	float mMultiScatteringDebugMax = 0.0f;
 	bool mMultiScatteringStatsValid = false;
@@ -279,6 +292,9 @@ private:
 	bool mAutoExposureEnabled = true;
 	float mManualExposure = 1.0f;
 	float mExposureBiasEv = 0.0f;
+	bool mUseHistogramAutoExposure = true;
+	float mAutoExposureHistogramLowPercent = 50.0f;
+	float mAutoExposureHistogramHighPercent = 98.0f;
 	bool mSunAngleExposureBiasEnabled = true;
 	float mSunAngleExposureBiasAtHorizonEv = -0.7f;
 	float mSunAngleExposureBiasAtNoonEv = 0.7f;

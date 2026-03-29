@@ -1,0 +1,87 @@
+#version 430 core
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer HistogramBuffer
+{
+	uint bins[];
+};
+
+layout(r32f, binding = 0) uniform writeonly image2D u_meter_luminance_image;
+
+uniform int u_bin_count;
+uniform float u_log_luminance_min;
+uniform float u_log_luminance_max;
+uniform float u_low_percent;
+uniform float u_high_percent;
+uniform float u_fallback_luminance;
+
+void main()
+{
+	if (u_bin_count <= 0)
+	{
+		imageStore(u_meter_luminance_image, ivec2(0, 0), vec4(max(u_fallback_luminance, 1e-4), 0.0, 0.0, 1.0));
+		return;
+	}
+
+	uint totalCount = 0u;
+	for (int i = 0; i < u_bin_count; ++i)
+	{
+		totalCount += bins[i];
+	}
+
+	if (totalCount == 0u)
+	{
+		imageStore(u_meter_luminance_image, ivec2(0, 0), vec4(max(u_fallback_luminance, 1e-4), 0.0, 0.0, 1.0));
+		return;
+	}
+
+	float totalF = float(totalCount);
+	float lowCut = clamp(u_low_percent, 0.0, 0.99) * totalF;
+	float highCut = clamp(u_high_percent, 0.01, 1.0) * totalF;
+	if (highCut <= lowCut)
+	{
+		highCut = min(lowCut + 1.0, totalF);
+	}
+
+	float cumulative = 0.0;
+	float weightedLogLum = 0.0;
+	float weightSum = 0.0;
+	float range = max(u_log_luminance_max - u_log_luminance_min, 1e-4);
+
+	for (int i = 0; i < u_bin_count; ++i)
+	{
+		float count = float(bins[i]);
+		if (count <= 0.0)
+		{
+			continue;
+		}
+
+		float nextCumulative = cumulative + count;
+		float segmentStart = max(cumulative, lowCut);
+		float segmentEnd = min(nextCumulative, highCut);
+		float segmentWeight = segmentEnd - segmentStart;
+		if (segmentWeight > 0.0)
+		{
+			float t = (float(i) + 0.5) / float(u_bin_count);
+			float logLum = u_log_luminance_min + t * range;
+			weightedLogLum += logLum * segmentWeight;
+			weightSum += segmentWeight;
+		}
+
+		cumulative = nextCumulative;
+		if (cumulative >= highCut)
+		{
+			break;
+		}
+	}
+
+	float meterLuminance = max(u_fallback_luminance, 1e-4);
+	if (weightSum > 1e-4)
+	{
+		float avgLogLum = weightedLogLum / weightSum;
+		meterLuminance = max(exp2(avgLogLum), 1e-4);
+	}
+
+	imageStore(u_meter_luminance_image, ivec2(0, 0), vec4(meterLuminance, 0.0, 0.0, 1.0));
+}

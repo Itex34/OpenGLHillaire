@@ -24,6 +24,9 @@ struct GlfwUiState
 	bool uiAutoExposure = true;
 	float uiManualExposure = 1.0f;
 	float uiExposureBiasEv = 0.0f;
+	bool uiUseHistogramAutoExposure = true;
+	float uiAutoExposureHistogramLowPercent = 50.0f;
+	float uiAutoExposureHistogramHighPercent = 98.0f;
 	bool uiSunAngleExposureBias = true;
 	float uiSunAngleExposureBiasAtHorizonEv = -0.7f;
 	float uiSunAngleExposureBiasAtNoonEv = 0.7f;

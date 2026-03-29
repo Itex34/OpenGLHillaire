@@ -4,8 +4,10 @@ in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
 
 uniform sampler2D u_hdr_tex;
+uniform sampler2D u_auto_exposure_meter_tex;
 uniform int u_use_agx;
 uniform int u_auto_exposure;
+uniform int u_use_histogram_auto_exposure;
 uniform int u_auto_exposure_mip_level;
 uniform float u_manual_exposure;
 uniform float u_exposure_bias_ev;
@@ -81,11 +83,19 @@ float computeExposure()
 	float exposure = max(u_manual_exposure, 0.001);
 	if (u_auto_exposure != 0)
 	{
-		vec3 avgHdr = textureLod(u_hdr_tex, vec2(0.5, 0.5), float(max(u_auto_exposure_mip_level, 0))).rgb;
-		avgHdr = max(avgHdr, vec3(0.0));
-		const vec3 luma = vec3(0.2126, 0.7152, 0.0722);
-		float avgLuminance = max(dot(avgHdr, luma), 1e-4);
-		exposure = max(u_auto_exposure_key, 0.01) / avgLuminance;
+		if (u_use_histogram_auto_exposure != 0)
+		{
+			float meterLuminance = max(texture(u_auto_exposure_meter_tex, vec2(0.5, 0.5)).r, 1e-4);
+			exposure = max(u_auto_exposure_key, 0.01) / meterLuminance;
+		}
+		else
+		{
+			vec3 avgHdr = textureLod(u_hdr_tex, vec2(0.5, 0.5), float(max(u_auto_exposure_mip_level, 0))).rgb;
+			avgHdr = max(avgHdr, vec3(0.0));
+			const vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+			float avgLuminance = max(dot(avgHdr, luma), 1e-4);
+			exposure = max(u_auto_exposure_key, 0.01) / avgLuminance;
+		}
 	}
 	exposure *= exp2(u_exposure_bias_ev);
 	return max(exposure, 0.001);
