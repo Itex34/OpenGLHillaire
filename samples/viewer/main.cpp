@@ -1,6 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "GameGl.h"
+#include "PbrSkyLibOpenGL/SkyAtmosphereRenderer.h"
 #include "GlfwAppLoop.h"
 
 #include <cstdio>
@@ -71,8 +71,8 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
-	GameGl gameGl;
-	if (!gameGl.initialise())
+	pbrsky::SkyAtmosphereRenderer renderer;
+	if (!renderer.initialise())
 	{
 		ImGui_ImplOpenGL3_Shutdown();
 		ImGui_ImplGlfw_Shutdown();
@@ -82,9 +82,9 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
-	runGlfwMainLoop(window, gameGl);
+	runGlfwMainLoop(window, renderer);
 
-	gameGl.shutdown();
+	renderer.shutdown();
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext(imguiContext);

@@ -39,16 +39,23 @@ struct GlLutInfo
 	unsigned int AERIAL_PERSPECTIVE_TEXTURE_DEPTH = 32;
 };
 
-class GameGl
+class SkyRendererGl
 {
 public:
-	GameGl() = default;
-	~GameGl() = default;
+	SkyRendererGl() = default;
+	~SkyRendererGl() = default;
 
 	bool initialise();
 	void shutdown();
 	void resize(int width, int height);
 	void render();
+
+	void setExternalSceneTextures(unsigned int hdrTexture, unsigned int linearDepthTexture);
+	void clearExternalSceneTextures();
+	void setExternalShadowMapTexture(unsigned int depthCompareTexture);
+	void clearExternalShadowMapTexture();
+	void setExternalShadowViewProj(const float* matrix4x4ColumnMajor);
+
 	void setAerialPerspectiveDebugDepthKm(float depthKm) { mAerialPerspectiveDebugDepthKm = depthKm; }
 	void setCameraHeight(float value);
 	void setCameraForward(float value);
@@ -91,14 +98,6 @@ public:
 	void setCameraEv100(float value);
 	void setOutputSrgb(bool enabled) { mOutputSrgb = enabled; }
 	void setMultipleScatteringFactor(float value);
-	void setRenderTerrain(bool enabled)
-	{
-		if (mRenderTerrain != enabled)
-		{
-			mRenderTerrain = enabled;
-			markSkyAndApDirty();
-		}
-	}
 	void setAtmosphereInfo(const GlAtmosphereInfo& value);
 
 	float getCameraHeight() const { return mCameraHeight; }
@@ -119,7 +118,6 @@ public:
 	bool getShadowMapsEnabled() const { return mShadowMapsEnabled; }
 	bool getColoredTransmittance() const { return mColoredTransmittance; }
 	float getMultipleScatteringFactor() const { return mMultipleScatteringFactor; }
-	bool getRenderTerrain() const { return mRenderTerrain; }
 	bool getUseAgxTonemap() const { return mUseAgxTonemap; }
 	bool getAutoExposureEnabled() const { return mAutoExposureEnabled; }
 	float getManualExposure() const { return mManualExposure; }
@@ -152,12 +150,10 @@ public:
 	bool hasAerialPerspectiveDebugStats() const { return mAerialPerspectiveStatsValid; }
 	bool isInitialised() const { return mInitialised; }
 	bool hasGpuPassTimings() const { return mGpuPassTimingsSupported; }
-	float getShadowPassMs() const { return mShadowPassTimer.lastMs; }
 	float getTransmittancePassMs() const { return mTransmittancePassTimer.lastMs; }
 	float getMultiScatteringPassMs() const { return mMultiScatteringPassTimer.lastMs; }
 	float getSkyViewPassMs() const { return mSkyViewPassTimer.lastMs; }
 	float getAerialPerspectivePassMs() const { return mAerialPerspectivePassTimer.lastMs; }
-	float getTerrainPassMs() const { return mTerrainPassTimer.lastMs; }
 	float getPresentPassMs() const { return mPresentPassTimer.lastMs; }
 
 private:
@@ -176,7 +172,6 @@ private:
 	bool createMultipleScatteringResources();
 	bool createSkyViewResources();
 	bool createAerialPerspectiveResources();
-	bool createTerrainResources();
 	bool createShadowResources();
 	bool createSceneResources();
 	void destroyPrograms();
@@ -186,15 +181,12 @@ private:
 	void destroyMultipleScatteringResources();
 	void destroySkyViewResources();
 	void destroyAerialPerspectiveResources();
-	void destroyTerrainResources();
 	void destroyShadowResources();
 	void destroySceneResources();
 	void renderTransmittanceLut();
 	void renderMultipleScatteringLut();
 	void renderSkyViewLut();
 	void renderAerialPerspectiveVolume();
-	void renderShadowMap();
-	void renderTerrainScene();
 	void renderPresent();
 	void runAutoExposureHistogram();
 	void copyAerialPerspectivePreviewSlice();
@@ -203,7 +195,6 @@ private:
 	void updateMultiScatteringDebugStats();
 	void updateAerialPerspectiveDebugStats();
 	void updateViewAndSunDirections();
-	void updateShadowViewProj();
 	void resolveGpuPassTimers();
 	void beginGpuPassTimer(GpuPassTimer& timer);
 	void endGpuPassTimer(GpuPassTimer& timer);
@@ -238,7 +229,6 @@ private:
 	bool mFastAerialPerspective = true;
 	bool mShadowMapsEnabled = true;
 	bool mColoredTransmittance = false;
-	bool mRenderTerrain = true;
 	GlVec3 mViewDir = { 0.0f, 1.0f, 0.0f };
 	GlVec3 mViewRight = { 1.0f, 0.0f, 0.0f };
 	GlVec3 mViewUp = { 0.0f, 0.0f, 1.0f };
@@ -251,12 +241,10 @@ private:
 	unsigned int mMultiScatteringProgram = 0;
 	unsigned int mSkyViewProgram = 0;
 	unsigned int mAerialPerspectiveProgram = 0;
-	unsigned int mTerrainProgram = 0;
 	unsigned int mRaymarchProgram = 0;
 	unsigned int mPostProcessProgram = 0;
 	unsigned int mAutoExposureHistogramProgram = 0;
 	unsigned int mAutoExposureReduceProgram = 0;
-	unsigned int mTerrainShadowProgram = 0;
 
 	unsigned int mTransmittanceTex = 0;
 	unsigned int mTransmittanceFbo = 0;
@@ -266,10 +254,7 @@ private:
 	unsigned int mSkyViewFbo = 0;
 	unsigned int mAerialPerspectiveTex = 0;
 	unsigned int mAerialPerspectivePreviewTex = 0;
-	unsigned int mTerrainHeightmapTex = 0;
-	unsigned int mShadowDepthTex = 0;
 	unsigned int mShadowFallbackTex = 0;
-	unsigned int mShadowFbo = 0;
 	unsigned int mSceneFbo = 0;
 	unsigned int mSceneHdrTex = 0;
 	unsigned int mSceneLinearDepthTex = 0;
@@ -305,18 +290,20 @@ private:
 	float mCameraEv100 = 15.0f;
 	bool mOutputSrgb = true;
 	int mFinalHdrMipLevel = 0;
-	unsigned int mShadowMapSize = 4096;
 	float mShadowViewProj[16] = {
 		1.0f, 0.0f, 0.0f, 0.0f,
 		0.0f, 1.0f, 0.0f, 0.0f,
 		0.0f, 0.0f, 1.0f, 0.0f,
 		0.0f, 0.0f, 0.0f, 1.0f
 	};
-	GpuPassTimer mShadowPassTimer = {};
+	bool mHasExternalSceneTextures = false;
+	unsigned int mExternalSceneHdrTex = 0;
+	unsigned int mExternalSceneLinearDepthTex = 0;
+	bool mHasExternalShadowMapTexture = false;
+	unsigned int mExternalShadowMapDepthTex = 0;
 	GpuPassTimer mTransmittancePassTimer = {};
 	GpuPassTimer mMultiScatteringPassTimer = {};
 	GpuPassTimer mSkyViewPassTimer = {};
 	GpuPassTimer mAerialPerspectivePassTimer = {};
-	GpuPassTimer mTerrainPassTimer = {};
 	GpuPassTimer mPresentPassTimer = {};
 };

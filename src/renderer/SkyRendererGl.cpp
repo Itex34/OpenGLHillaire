@@ -1,12 +1,11 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "GameGl.h"
+#include "SkyRendererGl.h"
 
 #if defined(_WIN32)
 #include <windows.h>
 #endif
 #include <GL/gl3w.h>
-#include <tinyexr/tinyexr.h>
 #include <glm/glm.hpp>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -36,9 +35,6 @@ namespace
 	const char* kMultiScatteringComputeShaderPath = "Resources/glsl/new_multi_scattering_lut.comp";
 	const char* kSkyViewFragmentShaderPath = "Resources/glsl/skyview_lut.frag";
 	const char* kAerialPerspectiveComputeShaderPath = "Resources/glsl/aerial_perspective_volume.comp";
-	const char* kTerrainVertexShaderPath = "Resources/glsl/terrain.vert";
-	const char* kTerrainFragmentShaderPath = "Resources/glsl/terrain.frag";
-	const char* kTerrainShadowFragmentShaderPath = "Resources/glsl/terrain_shadow.frag";
 	const char* kRaymarchFragmentShaderPath = "Resources/glsl/render_raymarching_hillaire.frag";
 	const char* kPostProcessFragmentShaderPath = "Resources/glsl/postprocess.frag";
 	const char* kAutoExposureHistogramComputeShaderPath = "Resources/glsl/auto_exposure_histogram.comp";
@@ -117,45 +113,6 @@ namespace
 		info.absorption_layer1_constant_term = 8.0f / 3.0f;
 	}
 
-	bool loadExrRgba(const char* path, int& outWidth, int& outHeight, std::vector<float>& outPixels, std::string& outError)
-	{
-		const std::string originalPath(path);
-		const std::string candidates[] = {
-			originalPath,
-			"../" + originalPath,
-			"../../" + originalPath,
-			"../../../" + originalPath,
-			"../../../../" + originalPath,
-		};
-
-		int width = 0;
-		int height = 0;
-		float* rgba = nullptr;
-		std::string lastError;
-		for (const std::string& candidate : candidates)
-		{
-			const char* exrError = nullptr;
-			const int result = LoadEXR(&rgba, &width, &height, candidate.c_str(), &exrError);
-			if (result == TINYEXR_SUCCESS && rgba != nullptr && width > 0 && height > 0)
-			{
-				outWidth = width;
-				outHeight = height;
-				const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
-				outPixels.assign(rgba, rgba + pixelCount);
-				std::free(rgba);
-				return true;
-			}
-			if (exrError != nullptr)
-			{
-				lastError = exrError;
-				FreeEXRErrorMessage(exrError);
-			}
-		}
-
-		outError = lastError.empty() ? "Heightmap EXR not found." : lastError;
-		return false;
-	}
-
 	glm::vec3 makeViewDirectionZUpForwardY(float yaw, float pitch)
 	{
 		const float cp = std::cos(pitch);
@@ -184,20 +141,65 @@ namespace
 }
 
 
-void GameGl::markLutsDirty()
+void SkyRendererGl::markLutsDirty()
 {
 	mLutDirty = true;
 	mSkyViewDirty = true;
 	mAerialPerspectiveDirty = true;
 }
 
-void GameGl::markSkyAndApDirty()
+void SkyRendererGl::markSkyAndApDirty()
 {
 	mSkyViewDirty = true;
 	mAerialPerspectiveDirty = true;
 }
 
-void GameGl::setCameraHeight(float value)
+void SkyRendererGl::setExternalSceneTextures(unsigned int hdrTexture, unsigned int linearDepthTexture)
+{
+	if (hdrTexture == 0 || linearDepthTexture == 0)
+	{
+		clearExternalSceneTextures();
+		return;
+	}
+	mExternalSceneHdrTex = hdrTexture;
+	mExternalSceneLinearDepthTex = linearDepthTexture;
+	mHasExternalSceneTextures = true;
+}
+
+void SkyRendererGl::clearExternalSceneTextures()
+{
+	mHasExternalSceneTextures = false;
+	mExternalSceneHdrTex = 0;
+	mExternalSceneLinearDepthTex = 0;
+}
+
+void SkyRendererGl::setExternalShadowMapTexture(unsigned int depthCompareTexture)
+{
+	if (depthCompareTexture == 0)
+	{
+		clearExternalShadowMapTexture();
+		return;
+	}
+	mExternalShadowMapDepthTex = depthCompareTexture;
+	mHasExternalShadowMapTexture = true;
+}
+
+void SkyRendererGl::clearExternalShadowMapTexture()
+{
+	mHasExternalShadowMapTexture = false;
+	mExternalShadowMapDepthTex = 0;
+}
+
+void SkyRendererGl::setExternalShadowViewProj(const float* matrix4x4ColumnMajor)
+{
+	if (matrix4x4ColumnMajor == nullptr)
+	{
+		return;
+	}
+	std::memcpy(mShadowViewProj, matrix4x4ColumnMajor, sizeof(mShadowViewProj));
+}
+
+void SkyRendererGl::setCameraHeight(float value)
 {
 	if (std::fabs(mCameraHeight - value) > 1e-6f)
 	{
@@ -207,7 +209,7 @@ void GameGl::setCameraHeight(float value)
 	}
 }
 
-void GameGl::setCameraForward(float value)
+void SkyRendererGl::setCameraForward(float value)
 {
 	if (std::fabs(mCameraForward - value) > 1e-6f)
 	{
@@ -217,7 +219,7 @@ void GameGl::setCameraForward(float value)
 	}
 }
 
-void GameGl::setCameraOffset(const GlVec3& value)
+void SkyRendererGl::setCameraOffset(const GlVec3& value)
 {
 	const bool changed =
 		std::fabs(mCameraPosition.x - value.x) > 1e-6f ||
@@ -233,7 +235,7 @@ void GameGl::setCameraOffset(const GlVec3& value)
 	}
 }
 
-void GameGl::setViewYaw(float value)
+void SkyRendererGl::setViewYaw(float value)
 {
 	if (std::fabs(mViewYaw - value) > 1e-6f)
 	{
@@ -243,7 +245,7 @@ void GameGl::setViewYaw(float value)
 	}
 }
 
-void GameGl::setViewPitch(float value)
+void SkyRendererGl::setViewPitch(float value)
 {
 	const float clamped = value < -1.55f ? -1.55f : (value > 1.55f ? 1.55f : value);
 	if (std::fabs(mViewPitch - clamped) > 1e-6f)
@@ -254,7 +256,7 @@ void GameGl::setViewPitch(float value)
 	}
 }
 
-void GameGl::setSunIlluminanceScale(float value)
+void SkyRendererGl::setSunIlluminanceScale(float value)
 {
 	if (std::fabs(mSunIlluminanceScale - value) > 1e-6f)
 	{
@@ -263,7 +265,7 @@ void GameGl::setSunIlluminanceScale(float value)
 	}
 }
 
-void GameGl::setSunYaw(float value)
+void SkyRendererGl::setSunYaw(float value)
 {
 	if (std::fabs(mSunYaw - value) > 1e-6f)
 	{
@@ -272,7 +274,7 @@ void GameGl::setSunYaw(float value)
 	}
 }
 
-void GameGl::setSunPitch(float value)
+void SkyRendererGl::setSunPitch(float value)
 {
 	if (std::fabs(mSunPitch - value) > 1e-6f)
 	{
@@ -281,7 +283,7 @@ void GameGl::setSunPitch(float value)
 	}
 }
 
-void GameGl::setRayMarchMinSpp(int value)
+void SkyRendererGl::setRayMarchMinSpp(int value)
 {
 	const int clamped = value < 1 ? 1 : value;
 	if (mRayMarchMinSpp != clamped)
@@ -294,7 +296,7 @@ void GameGl::setRayMarchMinSpp(int value)
 	}
 }
 
-void GameGl::setRayMarchMaxSpp(int value)
+void SkyRendererGl::setRayMarchMaxSpp(int value)
 {
 	int clamped = value < 2 ? 2 : value;
 	if (clamped <= mRayMarchMinSpp)
@@ -307,17 +309,17 @@ void GameGl::setRayMarchMaxSpp(int value)
 	}
 }
 
-void GameGl::setFastSky(bool enabled)
+void SkyRendererGl::setFastSky(bool enabled)
 {
 	mFastSky = enabled;
 }
 
-void GameGl::setFastAerialPerspective(bool enabled)
+void SkyRendererGl::setFastAerialPerspective(bool enabled)
 {
 	mFastAerialPerspective = enabled;
 }
 
-void GameGl::setAerialPerspectivePreviewSlice(int value)
+void SkyRendererGl::setAerialPerspectivePreviewSlice(int value)
 {
 	const int depth = static_cast<int>(mLutsInfo.AERIAL_PERSPECTIVE_TEXTURE_DEPTH);
 	if (depth <= 0)
@@ -331,19 +333,19 @@ void GameGl::setAerialPerspectivePreviewSlice(int value)
 	mAerialPerspectivePreviewSlice = clamped;
 }
 
-void GameGl::setManualExposure(float value)
+void SkyRendererGl::setManualExposure(float value)
 {
 	const float clamped = value < 0.001f ? 0.001f : value;
 	mManualExposure = clamped;
 }
 
-void GameGl::setExposureBiasEv(float value)
+void SkyRendererGl::setExposureBiasEv(float value)
 {
 	const float clamped = value < -16.0f ? -16.0f : (value > 16.0f ? 16.0f : value);
 	mExposureBiasEv = clamped;
 }
 
-void GameGl::setAutoExposureHistogramLowPercent(float value)
+void SkyRendererGl::setAutoExposureHistogramLowPercent(float value)
 {
 	float clamped = value < 0.0f ? 0.0f : (value > 95.0f ? 95.0f : value);
 	if (clamped >= mAutoExposureHistogramHighPercent)
@@ -353,7 +355,7 @@ void GameGl::setAutoExposureHistogramLowPercent(float value)
 	mAutoExposureHistogramLowPercent = clamped < 0.0f ? 0.0f : clamped;
 }
 
-void GameGl::setAutoExposureHistogramHighPercent(float value)
+void SkyRendererGl::setAutoExposureHistogramHighPercent(float value)
 {
 	float clamped = value < 5.0f ? 5.0f : (value > 100.0f ? 100.0f : value);
 	if (clamped <= mAutoExposureHistogramLowPercent)
@@ -363,43 +365,43 @@ void GameGl::setAutoExposureHistogramHighPercent(float value)
 	mAutoExposureHistogramHighPercent = clamped > 100.0f ? 100.0f : clamped;
 }
 
-void GameGl::setSunAngleExposureBiasAtHorizonEv(float value)
+void SkyRendererGl::setSunAngleExposureBiasAtHorizonEv(float value)
 {
 	const float clamped = value < -16.0f ? -16.0f : (value > 16.0f ? 16.0f : value);
 	mSunAngleExposureBiasAtHorizonEv = clamped;
 }
 
-void GameGl::setSunAngleExposureBiasAtNoonEv(float value)
+void SkyRendererGl::setSunAngleExposureBiasAtNoonEv(float value)
 {
 	const float clamped = value < -16.0f ? -16.0f : (value > 16.0f ? 16.0f : value);
 	mSunAngleExposureBiasAtNoonEv = clamped;
 }
 
-void GameGl::setDisplayGamma(float value)
+void SkyRendererGl::setDisplayGamma(float value)
 {
 	const float clamped = value < 0.01f ? 0.01f : value;
 	mDisplayGamma = clamped;
 }
 
-void GameGl::setAutoExposureKey(float value)
+void SkyRendererGl::setAutoExposureKey(float value)
 {
 	const float clamped = value < 0.01f ? 0.01f : (value > 1.0f ? 1.0f : value);
 	mAutoExposureKey = clamped;
 }
 
-void GameGl::setAgxSaturation(float value)
+void SkyRendererGl::setAgxSaturation(float value)
 {
 	const float clamped = value < 0.0f ? 0.0f : (value > 2.0f ? 2.0f : value);
 	mAgxSaturation = clamped;
 }
 
-void GameGl::setCameraEv100(float value)
+void SkyRendererGl::setCameraEv100(float value)
 {
 	const float clamped = value < -6.0f ? -6.0f : (value > 24.0f ? 24.0f : value);
 	mCameraEv100 = clamped;
 }
 
-void GameGl::setMultipleScatteringFactor(float value)
+void SkyRendererGl::setMultipleScatteringFactor(float value)
 {
 	if (std::fabs(mMultipleScatteringFactor - value) > 1e-6f)
 	{
@@ -408,13 +410,13 @@ void GameGl::setMultipleScatteringFactor(float value)
 	}
 }
 
-void GameGl::setAtmosphereInfo(const GlAtmosphereInfo& value)
+void SkyRendererGl::setAtmosphereInfo(const GlAtmosphereInfo& value)
 {
 	mAtmosphereInfo = value;
 	markLutsDirty();
 }
 
-void GameGl::updateViewAndSunDirections()
+void SkyRendererGl::updateViewAndSunDirections()
 {
 	const glm::vec3 viewDir = makeViewDirectionZUpForwardY(mViewYaw, mViewPitch);
 	mViewDir = { viewDir.x, viewDir.y, viewDir.z };
@@ -449,34 +451,15 @@ void GameGl::updateViewAndSunDirections()
 	mSunDir = { sunDir.x, sunDir.y, sunDir.z };
 }
 
-void GameGl::updateShadowViewProj()
-{
-	const glm::vec3 eyePosition(0.0f, 0.0f, 0.0f);
-	const glm::vec3 focusPosition(-mSunDir.x, -mSunDir.y, -mSunDir.z);
-	const glm::vec3 upDirection(0.0f, 0.0f, 1.0f);
-	const glm::mat4 viewMatrix = glm::lookAtLH(eyePosition, focusPosition, upDirection);
-	const glm::mat4 projMatrix = glm::orthoLH_NO(
-		-100.0f,
-		100.0f,
-		-100.0f,
-		100.0f,
-		-100.0f,
-		100.0f);
-	const glm::mat4 viewProjMatrix = projMatrix * viewMatrix;
-	std::memcpy(mShadowViewProj, glm::value_ptr(viewProjMatrix), sizeof(mShadowViewProj));
-}
-
-void GameGl::createGpuPassTimers()
+void SkyRendererGl::createGpuPassTimers()
 {
 	mGpuPassTimingsSupported = true;
 
 	GpuPassTimer* timers[] = {
-		&mShadowPassTimer,
 		&mTransmittancePassTimer,
 		&mMultiScatteringPassTimer,
 		&mSkyViewPassTimer,
 		&mAerialPerspectivePassTimer,
-		&mTerrainPassTimer,
 		&mPresentPassTimer
 	};
 
@@ -497,15 +480,13 @@ void GameGl::createGpuPassTimers()
 	}
 }
 
-void GameGl::destroyGpuPassTimers()
+void SkyRendererGl::destroyGpuPassTimers()
 {
 	GpuPassTimer* timers[] = {
-		&mShadowPassTimer,
 		&mTransmittancePassTimer,
 		&mMultiScatteringPassTimer,
 		&mSkyViewPassTimer,
 		&mAerialPerspectivePassTimer,
-		&mTerrainPassTimer,
 		&mPresentPassTimer
 	};
 
@@ -524,7 +505,7 @@ void GameGl::destroyGpuPassTimers()
 	mGpuPassTimingsSupported = false;
 }
 
-void GameGl::resolveGpuPassTimers()
+void SkyRendererGl::resolveGpuPassTimers()
 {
 	if (!mGpuPassTimingsSupported)
 	{
@@ -532,12 +513,10 @@ void GameGl::resolveGpuPassTimers()
 	}
 
 	GpuPassTimer* timers[] = {
-		&mShadowPassTimer,
 		&mTransmittancePassTimer,
 		&mMultiScatteringPassTimer,
 		&mSkyViewPassTimer,
 		&mAerialPerspectivePassTimer,
-		&mTerrainPassTimer,
 		&mPresentPassTimer
 	};
 
@@ -560,7 +539,7 @@ void GameGl::resolveGpuPassTimers()
 	}
 }
 
-void GameGl::beginGpuPassTimer(GpuPassTimer& timer)
+void SkyRendererGl::beginGpuPassTimer(GpuPassTimer& timer)
 {
 	if (!mGpuPassTimingsSupported || timer.query == 0 || timer.pending || timer.active)
 	{
@@ -570,7 +549,7 @@ void GameGl::beginGpuPassTimer(GpuPassTimer& timer)
 	timer.active = true;
 }
 
-void GameGl::endGpuPassTimer(GpuPassTimer& timer)
+void SkyRendererGl::endGpuPassTimer(GpuPassTimer& timer)
 {
 	if (!mGpuPassTimingsSupported || !timer.active)
 	{
@@ -581,7 +560,7 @@ void GameGl::endGpuPassTimer(GpuPassTimer& timer)
 	timer.pending = true;
 }
 
-unsigned int GameGl::loadAndCompileShader(unsigned int type, const char* path)
+unsigned int SkyRendererGl::loadAndCompileShader(unsigned int type, const char* path)
 {
 	const std::string source = readTextFile(path);
 	if (source.empty())
@@ -612,7 +591,7 @@ unsigned int GameGl::loadAndCompileShader(unsigned int type, const char* path)
 	return 0;
 }
 
-unsigned int GameGl::linkProgram(unsigned int vs, unsigned int fs, const char* debugName)
+unsigned int SkyRendererGl::linkProgram(unsigned int vs, unsigned int fs, const char* debugName)
 {
 	unsigned int program = glCreateProgram();
 	glAttachShader(program, vs);
@@ -636,7 +615,7 @@ unsigned int GameGl::linkProgram(unsigned int vs, unsigned int fs, const char* d
 	return 0;
 }
 
-unsigned int GameGl::linkComputeProgram(unsigned int cs, const char* debugName)
+unsigned int SkyRendererGl::linkComputeProgram(unsigned int cs, const char* debugName)
 {
 	unsigned int program = glCreateProgram();
 	glAttachShader(program, cs);
@@ -659,31 +638,25 @@ unsigned int GameGl::linkComputeProgram(unsigned int cs, const char* debugName)
 	return 0;
 }
 
-bool GameGl::createPrograms()
+bool SkyRendererGl::createPrograms()
 {
 	const unsigned int fullscreenVs = loadAndCompileShader(GL_VERTEX_SHADER, kFullscreenVertexShaderPath);
 	const unsigned int transmittanceFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kTransmittanceFragmentShaderPath);
 	const unsigned int multiScatteringCs = loadAndCompileShader(GL_COMPUTE_SHADER, kMultiScatteringComputeShaderPath);
 	const unsigned int skyViewFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kSkyViewFragmentShaderPath);
 	const unsigned int aerialPerspectiveCs = loadAndCompileShader(GL_COMPUTE_SHADER, kAerialPerspectiveComputeShaderPath);
-	const unsigned int terrainVs = loadAndCompileShader(GL_VERTEX_SHADER, kTerrainVertexShaderPath);
-	const unsigned int terrainFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kTerrainFragmentShaderPath);
-	const unsigned int terrainShadowFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kTerrainShadowFragmentShaderPath);
 	const unsigned int raymarchFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kRaymarchFragmentShaderPath);
 	const unsigned int postProcessFs = loadAndCompileShader(GL_FRAGMENT_SHADER, kPostProcessFragmentShaderPath);
 	const unsigned int autoExposureHistogramCs = loadAndCompileShader(GL_COMPUTE_SHADER, kAutoExposureHistogramComputeShaderPath);
 	const unsigned int autoExposureReduceCs = loadAndCompileShader(GL_COMPUTE_SHADER, kAutoExposureReduceComputeShaderPath);
 
-	if (fullscreenVs == 0 || transmittanceFs == 0 || multiScatteringCs == 0 || skyViewFs == 0 || aerialPerspectiveCs == 0 || terrainVs == 0 || terrainFs == 0 || terrainShadowFs == 0 || raymarchFs == 0 || postProcessFs == 0 || autoExposureHistogramCs == 0 || autoExposureReduceCs == 0)
+	if (fullscreenVs == 0 || transmittanceFs == 0 || multiScatteringCs == 0 || skyViewFs == 0 || aerialPerspectiveCs == 0 || raymarchFs == 0 || postProcessFs == 0 || autoExposureHistogramCs == 0 || autoExposureReduceCs == 0)
 	{
 		if (fullscreenVs != 0) glDeleteShader(fullscreenVs);
 		if (transmittanceFs != 0) glDeleteShader(transmittanceFs);
 		if (multiScatteringCs != 0) glDeleteShader(multiScatteringCs);
 		if (skyViewFs != 0) glDeleteShader(skyViewFs);
 		if (aerialPerspectiveCs != 0) glDeleteShader(aerialPerspectiveCs);
-		if (terrainVs != 0) glDeleteShader(terrainVs);
-		if (terrainFs != 0) glDeleteShader(terrainFs);
-		if (terrainShadowFs != 0) glDeleteShader(terrainShadowFs);
 		if (raymarchFs != 0) glDeleteShader(raymarchFs);
 		if (postProcessFs != 0) glDeleteShader(postProcessFs);
 		if (autoExposureHistogramCs != 0) glDeleteShader(autoExposureHistogramCs);
@@ -695,8 +668,6 @@ bool GameGl::createPrograms()
 	mMultiScatteringProgram = linkComputeProgram(multiScatteringCs, "NewMultiScatteringLut");
 	mSkyViewProgram = linkProgram(fullscreenVs, skyViewFs, "SkyViewLut");
 	mAerialPerspectiveProgram = linkComputeProgram(aerialPerspectiveCs, "AerialPerspectiveVolume");
-	mTerrainProgram = linkProgram(terrainVs, terrainFs, "Terrain");
-	mTerrainShadowProgram = linkProgram(terrainVs, terrainShadowFs, "TerrainShadow");
 	mRaymarchProgram = linkProgram(fullscreenVs, raymarchFs, "RenderRaymarchingHillaire");
 	mPostProcessProgram = linkProgram(fullscreenVs, postProcessFs, "PostProcess");
 	mAutoExposureHistogramProgram = linkComputeProgram(autoExposureHistogramCs, "AutoExposureHistogram");
@@ -707,15 +678,12 @@ bool GameGl::createPrograms()
 	glDeleteShader(multiScatteringCs);
 	glDeleteShader(skyViewFs);
 	glDeleteShader(aerialPerspectiveCs);
-	glDeleteShader(terrainVs);
-	glDeleteShader(terrainFs);
-	glDeleteShader(terrainShadowFs);
 	glDeleteShader(raymarchFs);
 	glDeleteShader(postProcessFs);
 	glDeleteShader(autoExposureHistogramCs);
 	glDeleteShader(autoExposureReduceCs);
 
-	if (mTransmittanceProgram == 0 || mMultiScatteringProgram == 0 || mSkyViewProgram == 0 || mAerialPerspectiveProgram == 0 || mTerrainProgram == 0 || mTerrainShadowProgram == 0 || mRaymarchProgram == 0 || mPostProcessProgram == 0 || mAutoExposureHistogramProgram == 0 || mAutoExposureReduceProgram == 0)
+	if (mTransmittanceProgram == 0 || mMultiScatteringProgram == 0 || mSkyViewProgram == 0 || mAerialPerspectiveProgram == 0 || mRaymarchProgram == 0 || mPostProcessProgram == 0 || mAutoExposureHistogramProgram == 0 || mAutoExposureReduceProgram == 0)
 	{
 		destroyPrograms();
 		return false;
@@ -724,7 +692,7 @@ bool GameGl::createPrograms()
 	return true;
 }
 
-bool GameGl::createAutoExposureResources()
+bool SkyRendererGl::createAutoExposureResources()
 {
 	glGenBuffers(1, &mAutoExposureHistogramSsbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, mAutoExposureHistogramSsbo);
@@ -753,7 +721,7 @@ bool GameGl::createAutoExposureResources()
 	return true;
 }
 
-bool GameGl::createTransmittanceResources()
+bool SkyRendererGl::createTransmittanceResources()
 {
 	glGenTextures(1, &mTransmittanceTex);
 	glBindTexture(GL_TEXTURE_2D, mTransmittanceTex);
@@ -790,7 +758,7 @@ bool GameGl::createTransmittanceResources()
 	return true;
 }
 
-bool GameGl::createMultipleScatteringResources()
+bool SkyRendererGl::createMultipleScatteringResources()
 {
 	const GLsizei lutSize = static_cast<GLsizei>(mLutsInfo.MULTI_SCATTERING_TEXTURE_SIZE);
 
@@ -823,7 +791,7 @@ bool GameGl::createMultipleScatteringResources()
 	return true;
 }
 
-bool GameGl::createSkyViewResources()
+bool SkyRendererGl::createSkyViewResources()
 {
 	const int skyWidth = static_cast<int>(mLutsInfo.SKY_VIEW_TEXTURE_WIDTH);
 	const int skyHeight = static_cast<int>(mLutsInfo.SKY_VIEW_TEXTURE_HEIGHT);
@@ -854,7 +822,7 @@ bool GameGl::createSkyViewResources()
 	return true;
 }
 
-bool GameGl::createAerialPerspectiveResources()
+bool SkyRendererGl::createAerialPerspectiveResources()
 {
 	const GLsizei apWidth = static_cast<GLsizei>(mLutsInfo.AERIAL_PERSPECTIVE_TEXTURE_WIDTH);
 	const GLsizei apHeight = static_cast<GLsizei>(mLutsInfo.AERIAL_PERSPECTIVE_TEXTURE_HEIGHT);
@@ -893,56 +861,9 @@ bool GameGl::createAerialPerspectiveResources()
 	return true;
 }
 
-bool GameGl::createTerrainResources()
+bool SkyRendererGl::createShadowResources()
 {
-	int width = 0;
-	int height = 0;
-	std::vector<float> pixels;
-	std::string exrError;
-	const bool loaded = loadExrRgba("Resources/heightmap1.exr", width, height, pixels, exrError);
-
-	glGenTextures(1, &mTerrainHeightmapTex);
-	glBindTexture(GL_TEXTURE_2D, mTerrainHeightmapTex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	if (loaded)
-	{
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, pixels.data());
-	}
-	else
-	{
-		const float fallbackPixel[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1, 1, 0, GL_RGBA, GL_FLOAT, fallbackPixel);
-	}
-	glBindTexture(GL_TEXTURE_2D, 0);
-
-	if (!loaded)
-	{
-		std::fprintf(stderr, "OpenGL terrain warning: failed to load heightmap1.exr. Using flat fallback terrain. %s\n", exrError.c_str());
-	}
-	return true;
-}
-
-bool GameGl::createShadowResources()
-{
-	const GLsizei shadowSize = static_cast<GLsizei>(mShadowMapSize);
-
-	glGenTextures(1, &mShadowDepthTex);
-	glBindTexture(GL_TEXTURE_2D, mShadowDepthTex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-	const float borderColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-	glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, shadowSize, shadowSize, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-	glBindTexture(GL_TEXTURE_2D, 0);
-
-	// 1x1 always-lit shadow texture for fast runtime toggling without shader permutations.
+	// 1x1 always-lit fallback for when no external shadow map is supplied.
 	glGenTextures(1, &mShadowFallbackTex);
 	glBindTexture(GL_TEXTURE_2D, mShadowFallbackTex);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -954,24 +875,10 @@ bool GameGl::createShadowResources()
 	const float litDepth = 1.0f;
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, 1, 1, 0, GL_DEPTH_COMPONENT, GL_FLOAT, &litDepth);
 	glBindTexture(GL_TEXTURE_2D, 0);
-
-	glGenFramebuffers(1, &mShadowFbo);
-	glBindFramebuffer(GL_FRAMEBUFFER, mShadowFbo);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, mShadowDepthTex, 0);
-	glDrawBuffer(GL_NONE);
-	glReadBuffer(GL_NONE);
-	const unsigned int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	if (status != GL_FRAMEBUFFER_COMPLETE)
-	{
-		showMessageBox("OpenGL framebuffer error", "Failed to create shadow framebuffer.");
-		destroyShadowResources();
-		return false;
-	}
 	return true;
 }
 
-bool GameGl::createSceneResources()
+bool SkyRendererGl::createSceneResources()
 {
 	const GLsizei width = static_cast<GLsizei>(mBackbufferWidth);
 	const GLsizei height = static_cast<GLsizei>(mBackbufferHeight);
@@ -1048,7 +955,7 @@ bool GameGl::createSceneResources()
 	return true;
 }
 
-void GameGl::destroyPrograms()
+void SkyRendererGl::destroyPrograms()
 {
 	if (mAutoExposureReduceProgram != 0)
 	{
@@ -1080,16 +987,6 @@ void GameGl::destroyPrograms()
 		glDeleteProgram(mAerialPerspectiveProgram);
 		mAerialPerspectiveProgram = 0;
 	}
-	if (mTerrainProgram != 0)
-	{
-		glDeleteProgram(mTerrainProgram);
-		mTerrainProgram = 0;
-	}
-	if (mTerrainShadowProgram != 0)
-	{
-		glDeleteProgram(mTerrainShadowProgram);
-		mTerrainShadowProgram = 0;
-	}
 	if (mMultiScatteringProgram != 0)
 	{
 		glDeleteProgram(mMultiScatteringProgram);
@@ -1102,7 +999,7 @@ void GameGl::destroyPrograms()
 	}
 }
 
-void GameGl::destroyAutoExposureResources()
+void SkyRendererGl::destroyAutoExposureResources()
 {
 	if (mAutoExposureMeterTex != 0)
 	{
@@ -1116,7 +1013,7 @@ void GameGl::destroyAutoExposureResources()
 	}
 }
 
-void GameGl::destroyTransmittanceResources()
+void SkyRendererGl::destroyTransmittanceResources()
 {
 	if (mTransmittanceFbo != 0)
 	{
@@ -1130,7 +1027,7 @@ void GameGl::destroyTransmittanceResources()
 	}
 }
 
-void GameGl::destroyMultipleScatteringResources()
+void SkyRendererGl::destroyMultipleScatteringResources()
 {
 	if (mMultiScatteringPreviewTex != 0)
 	{
@@ -1144,7 +1041,7 @@ void GameGl::destroyMultipleScatteringResources()
 	}
 }
 
-void GameGl::destroySkyViewResources()
+void SkyRendererGl::destroySkyViewResources()
 {
 	if (mSkyViewFbo != 0)
 	{
@@ -1158,7 +1055,7 @@ void GameGl::destroySkyViewResources()
 	}
 }
 
-void GameGl::destroyAerialPerspectiveResources()
+void SkyRendererGl::destroyAerialPerspectiveResources()
 {
 	if (mAerialPerspectivePreviewTex != 0)
 	{
@@ -1172,27 +1069,8 @@ void GameGl::destroyAerialPerspectiveResources()
 	}
 }
 
-void GameGl::destroyTerrainResources()
+void SkyRendererGl::destroyShadowResources()
 {
-	if (mTerrainHeightmapTex != 0)
-	{
-		glDeleteTextures(1, &mTerrainHeightmapTex);
-		mTerrainHeightmapTex = 0;
-	}
-}
-
-void GameGl::destroyShadowResources()
-{
-	if (mShadowFbo != 0)
-	{
-		glDeleteFramebuffers(1, &mShadowFbo);
-		mShadowFbo = 0;
-	}
-	if (mShadowDepthTex != 0)
-	{
-		glDeleteTextures(1, &mShadowDepthTex);
-		mShadowDepthTex = 0;
-	}
 	if (mShadowFallbackTex != 0)
 	{
 		glDeleteTextures(1, &mShadowFallbackTex);
@@ -1200,7 +1078,7 @@ void GameGl::destroyShadowResources()
 	}
 }
 
-void GameGl::destroySceneResources()
+void SkyRendererGl::destroySceneResources()
 {
 	if (mFinalHdrFbo != 0)
 	{
@@ -1235,7 +1113,7 @@ void GameGl::destroySceneResources()
 	}
 }
 
-bool GameGl::initialise()
+bool SkyRendererGl::initialise()
 {
 	setupEarthAtmosphere(mAtmosphereInfo);
 	updateViewAndSunDirections();
@@ -1247,7 +1125,7 @@ bool GameGl::initialise()
 		shutdown();
 		return false;
 	}
-	if (!createAutoExposureResources() || !createTransmittanceResources() || !createMultipleScatteringResources() || !createSkyViewResources() || !createAerialPerspectiveResources() || !createTerrainResources() || !createShadowResources() || !createSceneResources())
+	if (!createAutoExposureResources() || !createTransmittanceResources() || !createMultipleScatteringResources() || !createSkyViewResources() || !createAerialPerspectiveResources() || !createShadowResources() || !createSceneResources())
 	{
 		shutdown();
 		return false;
@@ -1260,13 +1138,14 @@ bool GameGl::initialise()
 	return true;
 }
 
-void GameGl::shutdown()
+void SkyRendererGl::shutdown()
 {
+	clearExternalSceneTextures();
+	clearExternalShadowMapTexture();
 	destroyGpuPassTimers();
 	destroySceneResources();
 	destroyAutoExposureResources();
 	destroyShadowResources();
-	destroyTerrainResources();
 	destroyAerialPerspectiveResources();
 	destroySkyViewResources();
 	destroyMultipleScatteringResources();
@@ -1280,7 +1159,7 @@ void GameGl::shutdown()
 	mInitialised = false;
 }
 
-void GameGl::resize(int width, int height)
+void SkyRendererGl::resize(int width, int height)
 {
 	const int newWidth = width > 1 ? width : 1;
 	const int newHeight = height > 1 ? height : 1;
@@ -1298,7 +1177,7 @@ void GameGl::resize(int width, int height)
 	}
 }
 
-void GameGl::uploadAtmosphereUniforms(unsigned int program)
+void SkyRendererGl::uploadAtmosphereUniforms(unsigned int program)
 {
 	const GlVec3 atmosphereCameraOffset = mCameraOffset;
 	const float atmosphereCameraHeight = mCameraOffset.z;
@@ -1359,7 +1238,7 @@ void GameGl::uploadAtmosphereUniforms(unsigned int program)
 	set1i("u_colored_transmittance", (!mFastAerialPerspective && mColoredTransmittance) ? 1 : 0);
 }
 
-void GameGl::renderTransmittanceLut()
+void SkyRendererGl::renderTransmittanceLut()
 {
 	beginGpuPassTimer(mTransmittancePassTimer);
 	glBindFramebuffer(GL_FRAMEBUFFER, mTransmittanceFbo);
@@ -1378,7 +1257,7 @@ void GameGl::renderTransmittanceLut()
 	endGpuPassTimer(mTransmittancePassTimer);
 }
 
-void GameGl::renderMultipleScatteringLut()
+void SkyRendererGl::renderMultipleScatteringLut()
 {
 	beginGpuPassTimer(mMultiScatteringPassTimer);
 	glUseProgram(mMultiScatteringProgram);
@@ -1411,7 +1290,7 @@ void GameGl::renderMultipleScatteringLut()
 	updateMultiScatteringDebugStats();
 }
 
-void GameGl::updateMultiScatteringDebugStats()
+void SkyRendererGl::updateMultiScatteringDebugStats()
 {
 	const size_t size = static_cast<size_t>(mLutsInfo.MULTI_SCATTERING_TEXTURE_SIZE);
 	const size_t pixelCount = size * size;
@@ -1449,7 +1328,7 @@ void GameGl::updateMultiScatteringDebugStats()
 	mMultiScatteringStatsValid = true;
 }
 
-void GameGl::renderAerialPerspectiveVolume()
+void SkyRendererGl::renderAerialPerspectiveVolume()
 {
 	beginGpuPassTimer(mAerialPerspectivePassTimer);
 	glUseProgram(mAerialPerspectiveProgram);
@@ -1468,7 +1347,8 @@ void GameGl::renderAerialPerspectiveVolume()
 	const int multiLoc = glGetUniformLocation(mAerialPerspectiveProgram, "u_multiscattering_lut");
 	if (multiLoc >= 0) glUniform1i(multiLoc, 1);
 	glActiveTexture(GL_TEXTURE2);
-	glBindTexture(GL_TEXTURE_2D, mShadowMapsEnabled ? mShadowDepthTex : mShadowFallbackTex);
+	const unsigned int shadowTex = (mShadowMapsEnabled && mHasExternalShadowMapTexture) ? mExternalShadowMapDepthTex : mShadowFallbackTex;
+	glBindTexture(GL_TEXTURE_2D, shadowTex);
 	const int shadowTexLoc = glGetUniformLocation(mAerialPerspectiveProgram, "u_shadowmap_tex");
 	if (shadowTexLoc >= 0) glUniform1i(shadowTexLoc, 2);
 	const int shadowViewProjLoc = glGetUniformLocation(mAerialPerspectiveProgram, "u_shadow_view_proj");
@@ -1503,7 +1383,7 @@ void GameGl::renderAerialPerspectiveVolume()
 	updateAerialPerspectiveDebugStats();
 }
 
-void GameGl::copyAerialPerspectivePreviewSlice()
+void SkyRendererGl::copyAerialPerspectivePreviewSlice()
 {
 	if (mAerialPerspectiveTex == 0 || mAerialPerspectivePreviewTex == 0)
 	{
@@ -1539,7 +1419,7 @@ void GameGl::copyAerialPerspectivePreviewSlice()
 	glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
 }
 
-void GameGl::updateLutPreviewTextures()
+void SkyRendererGl::updateLutPreviewTextures()
 {
 	if (mMultiScatteringTex != 0 && mMultiScatteringPreviewTex != 0)
 	{
@@ -1607,7 +1487,7 @@ void GameGl::updateLutPreviewTextures()
 	}
 }
 
-void GameGl::updateAerialPerspectiveDebugStats()
+void SkyRendererGl::updateAerialPerspectiveDebugStats()
 {
 	const size_t width = static_cast<size_t>(mLutsInfo.AERIAL_PERSPECTIVE_TEXTURE_WIDTH);
 	const size_t height = static_cast<size_t>(mLutsInfo.AERIAL_PERSPECTIVE_TEXTURE_HEIGHT);
@@ -1647,7 +1527,7 @@ void GameGl::updateAerialPerspectiveDebugStats()
 	mAerialPerspectiveStatsValid = true;
 }
 
-void GameGl::renderSkyViewLut()
+void SkyRendererGl::renderSkyViewLut()
 {
 	beginGpuPassTimer(mSkyViewPassTimer);
 	glBindFramebuffer(GL_FRAMEBUFFER, mSkyViewFbo);
@@ -1678,132 +1558,7 @@ void GameGl::renderSkyViewLut()
 	endGpuPassTimer(mSkyViewPassTimer);
 }
 
-void GameGl::renderShadowMap()
-{
-	if (!mShadowMapsEnabled)
-	{
-		return;
-	}
-	beginGpuPassTimer(mShadowPassTimer);
-
-	updateShadowViewProj();
-
-	glBindFramebuffer(GL_FRAMEBUFFER, mShadowFbo);
-	glViewport(0, 0, static_cast<GLsizei>(mShadowMapSize), static_cast<GLsizei>(mShadowMapSize));
-	glEnable(GL_DEPTH_TEST);
-	glDepthMask(GL_TRUE);
-	glDisable(GL_BLEND);
-	glDisable(GL_CULL_FACE);
-	const float clearDepth = 1.0f;
-	glClearBufferfv(GL_DEPTH, 0, &clearDepth);
-
-	if (!mRenderTerrain)
-	{
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		endGpuPassTimer(mShadowPassTimer);
-		return;
-	}
-
-	glUseProgram(mTerrainShadowProgram);
-	const int terrainResLoc = glGetUniformLocation(mTerrainShadowProgram, "u_terrain_resolution");
-	if (terrainResLoc >= 0) glUniform1i(terrainResLoc, 512);
-	const int viewProjLoc = glGetUniformLocation(mTerrainShadowProgram, "u_view_proj");
-	if (viewProjLoc >= 0) glUniformMatrix4fv(viewProjLoc, 1, GL_FALSE, mShadowViewProj);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, mTerrainHeightmapTex);
-	const int heightmapLoc = glGetUniformLocation(mTerrainShadowProgram, "u_heightmap_tex");
-	if (heightmapLoc >= 0) glUniform1i(heightmapLoc, 0);
-
-	glEnable(GL_POLYGON_OFFSET_FILL);
-	glPolygonOffset(5.0f, 5.0f);
-	glBindVertexArray(mFullscreenVao);
-	glDrawArraysInstanced(GL_TRIANGLES, 0, 6, 512 * 512);
-
-	glBindVertexArray(0);
-	glDisable(GL_POLYGON_OFFSET_FILL);
-	glBindTexture(GL_TEXTURE_2D, 0);
-	glUseProgram(0);
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	endGpuPassTimer(mShadowPassTimer);
-}
-
-void GameGl::renderTerrainScene()
-{
-	beginGpuPassTimer(mTerrainPassTimer);
-	glBindFramebuffer(GL_FRAMEBUFFER, mSceneFbo);
-	glViewport(0, 0, mBackbufferWidth, mBackbufferHeight);
-	glEnable(GL_DEPTH_TEST);
-	glDepthMask(GL_TRUE);
-	glDisable(GL_BLEND);
-
-	const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-	const float clearLinearDepth[4] = { -1.0f, 0.0f, 0.0f, 1.0f };
-	const float clearDepth = 1.0f;
-	glClearBufferfv(GL_COLOR, 0, clearColor);
-	glClearBufferfv(GL_COLOR, 1, clearLinearDepth);
-	glClearBufferfv(GL_DEPTH, 0, &clearDepth);
-
-	if (!mRenderTerrain)
-	{
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		endGpuPassTimer(mTerrainPassTimer);
-		return;
-	}
-
-	const GlVec3 cameraWorld = {
-		mCameraOffset.x,
-		mCameraOffset.y,
-		mCameraOffset.z
-	};
-	const glm::vec3 eyePosition(cameraWorld.x, cameraWorld.y, cameraWorld.z);
-	const glm::vec3 focusPosition(cameraWorld.x + mViewDir.x, cameraWorld.y + mViewDir.y, cameraWorld.z + mViewDir.z);
-	const glm::vec3 upDirection(0.0f, 0.0f, 1.0f);
-	const glm::mat4 viewMatrix = glm::lookAtLH(eyePosition, focusPosition, upDirection);
-	const float aspectRatio = static_cast<float>(mBackbufferWidth) / static_cast<float>(mBackbufferHeight);
-	const glm::mat4 projMatrix = glm::perspectiveLH_NO(glm::radians(kMainCameraFovYDegrees), aspectRatio, 0.1f, 20000.0f);
-	const glm::mat4 viewProjMatrix = projMatrix * viewMatrix;
-
-	glUseProgram(mTerrainProgram);
-	uploadAtmosphereUniforms(mTerrainProgram);
-	const int terrainResLoc = glGetUniformLocation(mTerrainProgram, "u_terrain_resolution");
-	if (terrainResLoc >= 0) glUniform1i(terrainResLoc, 512);
-	const int viewProjLoc = glGetUniformLocation(mTerrainProgram, "u_view_proj");
-	if (viewProjLoc >= 0) glUniformMatrix4fv(viewProjLoc, 1, GL_FALSE, glm::value_ptr(viewProjMatrix));
-	const int shadowViewProjLoc = glGetUniformLocation(mTerrainProgram, "u_shadow_view_proj");
-	if (shadowViewProjLoc >= 0) glUniformMatrix4fv(shadowViewProjLoc, 1, GL_FALSE, mShadowViewProj);
-	const int camPosLoc = glGetUniformLocation(mTerrainProgram, "u_camera_world_pos");
-	if (camPosLoc >= 0) glUniform3f(camPosLoc, cameraWorld.x, cameraWorld.y, cameraWorld.z);
-
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, mTerrainHeightmapTex);
-	const int heightmapLoc = glGetUniformLocation(mTerrainProgram, "u_heightmap_tex");
-	if (heightmapLoc >= 0) glUniform1i(heightmapLoc, 0);
-
-	glActiveTexture(GL_TEXTURE1);
-	glBindTexture(GL_TEXTURE_2D, mTransmittanceTex);
-	const int transLoc = glGetUniformLocation(mTerrainProgram, "u_transmittance_lut");
-	if (transLoc >= 0) glUniform1i(transLoc, 1);
-	glActiveTexture(GL_TEXTURE2);
-	glBindTexture(GL_TEXTURE_2D, mShadowMapsEnabled ? mShadowDepthTex : mShadowFallbackTex);
-	const int shadowTexLoc = glGetUniformLocation(mTerrainProgram, "u_shadowmap_tex");
-	if (shadowTexLoc >= 0) glUniform1i(shadowTexLoc, 2);
-
-	glBindVertexArray(mFullscreenVao);
-	glDrawArraysInstanced(GL_TRIANGLES, 0, 6, 512 * 512);
-
-	glBindVertexArray(0);
-	glActiveTexture(GL_TEXTURE2);
-	glBindTexture(GL_TEXTURE_2D, 0);
-	glActiveTexture(GL_TEXTURE1);
-	glBindTexture(GL_TEXTURE_2D, 0);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, 0);
-	glUseProgram(0);
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	endGpuPassTimer(mTerrainPassTimer);
-}
-
-void GameGl::runAutoExposureHistogram()
+void SkyRendererGl::runAutoExposureHistogram()
 {
 	if (mAutoExposureHistogramProgram == 0 || mAutoExposureReduceProgram == 0 || mAutoExposureHistogramSsbo == 0 || mAutoExposureMeterTex == 0 || mFinalHdrTex == 0)
 	{
@@ -1873,7 +1628,7 @@ void GameGl::runAutoExposureHistogram()
 	glUseProgram(0);
 }
 
-void GameGl::renderPresent()
+void SkyRendererGl::renderPresent()
 {
 	beginGpuPassTimer(mPresentPassTimer);
 	glBindFramebuffer(GL_FRAMEBUFFER, mFinalHdrFbo);
@@ -1906,15 +1661,18 @@ void GameGl::renderPresent()
 	const int apLoc = glGetUniformLocation(mRaymarchProgram, "u_aerial_perspective_volume");
 	if (apLoc >= 0) glUniform1i(apLoc, 3);
 	glActiveTexture(GL_TEXTURE4);
-	glBindTexture(GL_TEXTURE_2D, mSceneHdrTex);
+	const unsigned int sceneColorTex = mHasExternalSceneTextures ? mExternalSceneHdrTex : mSceneHdrTex;
+	glBindTexture(GL_TEXTURE_2D, sceneColorTex);
 	const int sceneLoc = glGetUniformLocation(mRaymarchProgram, "u_scene_color");
 	if (sceneLoc >= 0) glUniform1i(sceneLoc, 4);
 	glActiveTexture(GL_TEXTURE5);
-	glBindTexture(GL_TEXTURE_2D, mSceneLinearDepthTex);
+	const unsigned int sceneLinearDepthTex = mHasExternalSceneTextures ? mExternalSceneLinearDepthTex : mSceneLinearDepthTex;
+	glBindTexture(GL_TEXTURE_2D, sceneLinearDepthTex);
 	const int linearDepthLoc = glGetUniformLocation(mRaymarchProgram, "u_scene_linear_depth");
 	if (linearDepthLoc >= 0) glUniform1i(linearDepthLoc, 5);
 	glActiveTexture(GL_TEXTURE6);
-	glBindTexture(GL_TEXTURE_2D, mShadowMapsEnabled ? mShadowDepthTex : mShadowFallbackTex);
+	const unsigned int shadowTex = (mShadowMapsEnabled && mHasExternalShadowMapTexture) ? mExternalShadowMapDepthTex : mShadowFallbackTex;
+	glBindTexture(GL_TEXTURE_2D, shadowTex);
 	const int shadowTexLoc = glGetUniformLocation(mRaymarchProgram, "u_shadowmap_tex");
 	if (shadowTexLoc >= 0) glUniform1i(shadowTexLoc, 6);
 	const int shadowViewProjLoc = glGetUniformLocation(mRaymarchProgram, "u_shadow_view_proj");
@@ -2024,7 +1782,7 @@ void GameGl::renderPresent()
 	endGpuPassTimer(mPresentPassTimer);
 }
 
-void GameGl::render()
+void SkyRendererGl::render()
 {
 	if (!mInitialised)
 	{
@@ -2033,7 +1791,22 @@ void GameGl::render()
 
 	updateViewAndSunDirections();
 	resolveGpuPassTimers();
-	renderShadowMap();
+
+	if (!mHasExternalSceneTextures)
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, mSceneFbo);
+		glViewport(0, 0, mBackbufferWidth, mBackbufferHeight);
+		glDisable(GL_BLEND);
+		glEnable(GL_DEPTH_TEST);
+		glDepthMask(GL_TRUE);
+		const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		const float clearLinearDepth[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		const float clearDepth = 1.0f;
+		glClearBufferfv(GL_COLOR, 0, clearColor);
+		glClearBufferfv(GL_COLOR, 1, clearLinearDepth);
+		glClearBufferfv(GL_DEPTH, 0, &clearDepth);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	}
 
 	if (mLutDirty)
 	{
@@ -2055,6 +1828,5 @@ void GameGl::render()
 	}
 	copyAerialPerspectivePreviewSlice();
 	updateLutPreviewTextures();
-	renderTerrainScene();
 	renderPresent();
 }

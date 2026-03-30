@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(UnrealEngineSkyAtmosphereOpenGL LANGUAGES C CXX)
+project(PbrSkyLibOpenGL LANGUAGES C CXX)
 
 option(SKYATMOS_FETCH_DEPS "Fetch GLFW and GLM via FetchContent when not found locally." ON)
 
@@ -71,18 +71,49 @@ set(SKYATMOS_SHADER_SOURCES
 	Resources/glsl/terrain_shadow.frag
 	Resources/glsl/render_raymarching_hillaire.frag
 	Resources/glsl/postprocess.frag
+	Resources/glsl/auto_exposure_histogram.comp
+	Resources/glsl/auto_exposure_reduce.comp
 )
 
-add_executable(UnrealEngineSkyAtmosphere
-	Application/main.cpp
-	Application/GameGl.cpp
-	Application/GlfwAppLoop.cpp
-	Application/GlfwAppUi.cpp
-	Application/TinyExrImpl.cpp
+add_library(PbrSkyLibOpenGL STATIC
+	src/SkyAtmosphereRenderer.cpp
+	src/renderer/SkyRendererGl.cpp
+)
+
+target_include_directories(PbrSkyLibOpenGL
+	PUBLIC
+		${CMAKE_CURRENT_SOURCE_DIR}/include
+	PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/src
+		${CMAKE_CURRENT_SOURCE_DIR}/imgui/examples/libs/gl3w
+)
+
+target_link_libraries(PbrSkyLibOpenGL
+	PUBLIC
+		${SKYATMOS_GLM_TARGET}
+		OpenGL::GL
+)
+
+if(WIN32)
+	target_compile_definitions(PbrSkyLibOpenGL PRIVATE NOMINMAX)
+endif()
+
+if(MSVC)
+	target_compile_options(PbrSkyLibOpenGL PRIVATE /W4 /EHsc)
+else()
+	target_compile_options(PbrSkyLibOpenGL PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(PbrSkyViewer
+	samples/viewer/main.cpp
+	samples/viewer/GlfwAppLoop.cpp
+	samples/viewer/GlfwAppUi.cpp
+	samples/viewer/TerrainSceneRenderer.cpp
+	samples/viewer/TinyExrImpl.cpp
 	${SKYATMOS_SHADER_SOURCES}
 )
 
-target_sources(UnrealEngineSkyAtmosphere PRIVATE
+target_sources(PbrSkyViewer PRIVATE
 	imgui/imgui.cpp
 	imgui/imgui_demo.cpp
 	imgui/imgui_draw.cpp
@@ -91,12 +122,11 @@ target_sources(UnrealEngineSkyAtmosphere PRIVATE
 	imgui/examples/libs/gl3w/GL/gl3w.c
 )
 
-# imgui_widgets.cpp exists in newer ImGui revisions but not in v1.62.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_widgets.cpp")
-	target_sources(UnrealEngineSkyAtmosphere PRIVATE imgui/imgui_widgets.cpp)
+	target_sources(PbrSkyViewer PRIVATE imgui/imgui_widgets.cpp)
 endif()
 
-target_include_directories(UnrealEngineSkyAtmosphere PRIVATE
+target_include_directories(PbrSkyViewer PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}
 	${CMAKE_CURRENT_SOURCE_DIR}/imgui
 	${CMAKE_CURRENT_SOURCE_DIR}/imgui/examples
@@ -105,38 +135,38 @@ target_include_directories(UnrealEngineSkyAtmosphere PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/deps/nanozlib
 )
 
-target_compile_definitions(UnrealEngineSkyAtmosphere PRIVATE
+target_compile_definitions(PbrSkyViewer PRIVATE
 	IMGUI_IMPL_OPENGL_LOADER_GL3W
 	IMGUI_DISABLE_OBSOLETE_FUNCTIONS
 )
 
 if(WIN32)
-	target_compile_definitions(UnrealEngineSkyAtmosphere PRIVATE NOMINMAX)
+	target_compile_definitions(PbrSkyViewer PRIVATE NOMINMAX)
 endif()
 
 if(MSVC)
-	target_compile_options(UnrealEngineSkyAtmosphere PRIVATE /W4 /EHsc)
+	target_compile_options(PbrSkyViewer PRIVATE /W4 /EHsc)
 else()
-	target_compile_options(UnrealEngineSkyAtmosphere PRIVATE -Wall -Wextra -Wpedantic)
+	target_compile_options(PbrSkyViewer PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-target_link_libraries(UnrealEngineSkyAtmosphere PRIVATE
+target_link_libraries(PbrSkyViewer PRIVATE
+	PbrSkyLibOpenGL
 	${SKYATMOS_GLFW_TARGET}
 	${SKYATMOS_GLM_TARGET}
 	OpenGL::GL
 )
 
-# Keep runtime assets next to the executable so working directory does not depend on IDE settings.
-add_custom_command(TARGET UnrealEngineSkyAtmosphere POST_BUILD
+add_custom_command(TARGET PbrSkyViewer POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E copy_directory
 		${CMAKE_SOURCE_DIR}/Resources
-		$<TARGET_FILE_DIR:UnrealEngineSkyAtmosphere>/Resources
+		$<TARGET_FILE_DIR:PbrSkyViewer>/Resources
 )
 
 source_group("Shaders" FILES ${SKYATMOS_SHADER_SOURCES})
 
-set_target_properties(UnrealEngineSkyAtmosphere PROPERTIES
+set_target_properties(PbrSkyViewer PROPERTIES
 	VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT UnrealEngineSkyAtmosphere)
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT PbrSkyViewer)

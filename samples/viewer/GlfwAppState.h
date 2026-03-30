@@ -36,6 +36,7 @@ struct GlfwUiState
 	bool uiPhysicalMode = false;
 	float uiCameraEv100 = 15.0f;
 	bool uiOutputSrgb = true;
+	float uiTerrainPassMs = 0.0f;
 	float apDebugDepthKm = 16.0f;
 	bool uiAnimateSun = false;
 	float uiSunAnimSpeed = 0.20f;

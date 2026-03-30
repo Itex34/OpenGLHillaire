@@ -2,14 +2,14 @@
 
 #include "GlfwAppUi.h"
 
-#include "GameGl.h"
+#include "PbrSkyLibOpenGL/SkyAtmosphereRenderer.h"
 #include "GlfwAppState.h"
 
 #include <cstdint>
 
 #include <imgui.h>
 
-void drawGlfwUi(GameGl& gameGl, GlfwUiState& state)
+void drawGlfwUi(pbrsky::SkyAtmosphereRenderer& renderer, GlfwUiState& state)
 {
 	ImGui::Begin("Scene");
 	ImGui::SliderFloat("Height", &state.uiCamHeight, 0.001f, 200.0f, "%.3f");
@@ -145,27 +145,25 @@ void drawGlfwUi(GameGl& gameGl, GlfwUiState& state)
 	ImGui::End();
 
 	ImGui::Begin("Performance");
-	if (!gameGl.hasGpuPassTimings())
+	if (!renderer.hasGpuPassTimings())
 	{
 		ImGui::TextUnformatted("GPU pass timings unavailable on this runtime.");
 	}
 	else
 	{
-		const float shadowMs = gameGl.getShadowPassMs();
-		const float transMs = gameGl.getTransmittancePassMs();
-		const float multiMs = gameGl.getMultiScatteringPassMs();
-		const float skyMs = gameGl.getSkyViewPassMs();
-		const float apMs = gameGl.getAerialPerspectivePassMs();
-		const float terrainMs = gameGl.getTerrainPassMs();
-		const float presentMs = gameGl.getPresentPassMs();
-		const float totalMs = shadowMs + transMs + multiMs + skyMs + apMs + terrainMs + presentMs;
+		const float transMs = renderer.getTransmittancePassMs();
+		const float multiMs = renderer.getMultiScatteringPassMs();
+		const float skyMs = renderer.getSkyViewPassMs();
+		const float apMs = renderer.getAerialPerspectivePassMs();
+		const float terrainMs = state.uiTerrainPassMs;
+		const float presentMs = renderer.getPresentPassMs();
+		const float totalMs = transMs + multiMs + skyMs + apMs + terrainMs + presentMs;
 
-		ImGui::Text("Shadow map: %.3f ms", shadowMs);
+		ImGui::Text("Terrain scene: %.3f ms", terrainMs);
 		ImGui::Text("Transmittance LUT: %.3f ms", transMs);
 		ImGui::Text("Multi-scattering LUT: %.3f ms", multiMs);
 		ImGui::Text("SkyView LUT: %.3f ms", skyMs);
 		ImGui::Text("Aerial perspective volume: %.3f ms", apMs);
-		ImGui::Text("Terrain scene: %.3f ms", terrainMs);
 		ImGui::Text("Present composite: %.3f ms", presentMs);
 		ImGui::Separator();
 		ImGui::Text("Total (listed passes): %.3f ms", totalMs);
@@ -175,17 +173,17 @@ void drawGlfwUi(GameGl& gameGl, GlfwUiState& state)
 
 	ImGui::Begin("LUT Preview");
 	ImGui::TextUnformatted("Transmittance LUT");
-	ImGui::Image((void*)(intptr_t)gameGl.getTransmittanceTexture(), ImVec2(512.0f, 128.0f));
+	ImGui::Image((void*)(intptr_t)renderer.getTransmittanceTexture(), ImVec2(512.0f, 128.0f));
 	ImGui::TextUnformatted("Multi-Scattering LUT");
 	ImGui::SliderFloat("MS LUT exposure", &state.msPreviewExposure, 1.0f, 256.0f, "%.1f");
-	ImGui::Image((void*)(intptr_t)gameGl.getMultipleScatteringPreviewTexture(), ImVec2(256.0f, 256.0f));
+	ImGui::Image((void*)(intptr_t)renderer.getMultipleScatteringPreviewTexture(), ImVec2(256.0f, 256.0f));
 	ImGui::TextUnformatted("SkyView LUT");
-	ImGui::Image((void*)(intptr_t)gameGl.getSkyViewTexture(), ImVec2(512.0f, 288.0f));
+	ImGui::Image((void*)(intptr_t)renderer.getSkyViewTexture(), ImVec2(512.0f, 288.0f));
 	ImGui::TextUnformatted("Aerial Perspective LUT (slice)");
-	const int apSliceCount = gameGl.getAerialPerspectiveDepthSliceCount();
+	const int apSliceCount = renderer.getAerialPerspectiveDepthSliceCount();
 	const int apSliceMax = (apSliceCount > 0) ? (apSliceCount - 1) : 0;
 	ImGui::SliderInt("AP Slice", &state.apPreviewSlice, 0, apSliceMax);
 	ImGui::SliderFloat("AP LUT exposure", &state.apPreviewExposure, 1.0f, 256.0f, "%.1f");
-	ImGui::Image((void*)(intptr_t)gameGl.getAerialPerspectivePreviewTexture(), ImVec2(256.0f, 256.0f));
+	ImGui::Image((void*)(intptr_t)renderer.getAerialPerspectivePreviewTexture(), ImVec2(256.0f, 256.0f));
 	ImGui::End();
 }
